@@ -268,20 +268,20 @@ UART_ChkType UART_Tx_Init(const uint8_t* TxBuffPtr, uint8_t TxLen, uint8_t group
     {
         CfgPtr = &UART_ConfigParam[groupID];
 
-        if (UART_Driver_State[groupID] == UART_INIT_DONE)
+        if (UART_Driver_State[groupID] == UART_INIT_DONE) // UART was initialized successfully
         {
             UART_TxLength[groupID] = TxLen;
             UART_TxBuffPtr[groupID] = TxBuffPtr;
             UART_TxCount[groupID] = 0;
             FIFO_State_Tx =(uint8_t)(CfgPtr->FIFOEN);
 
-            UARTCTL_REG(CfgPtr->UARTPortID) &= ~(1U << TXE_BIT_NO);  // Disable the transmitter pin
+            UARTCTL_REG(CfgPtr->UARTPortID) &= ~(1U << TXE_BIT_NO);  // Disable the transmitter pin to prevent sending while filling the FIFO
            // UARTIM_REG(CfgPtr->UARTPortID)  &= ~(1 <<TXIM_BIT_NO);  //Disable the interrupts to prevent the ISR from double transmitting
 
             if((TxLen <= (uint8_t)(CfgPtr->FIFO_Level)) && ( (CfgPtr->INT_Enable)!= 0 )  )
                 // bytes count not enough to trigger an interrupt
             {
-                UARTLCRH_REG(CfgPtr->UARTPortID) &= ~(1U<<FEN_BIT_NO); //disable the FIFO
+                UARTLCRH_REG(CfgPtr->UARTPortID) &= ~(1U<<FEN_BIT_NO); //Disable the FIFO so the ISR will be Triggered after transmitting the bytes
                 FIFO_State_Tx=0;
             }
             if((UARTFR_REG(CfgPtr->UARTPortID) & (1 << TXFF_BIT_NO)) == 1) // FIFO is full no place to write, the function returns
@@ -308,14 +308,12 @@ UART_ChkType UART_Tx_Init(const uint8_t* TxBuffPtr, uint8_t TxLen, uint8_t group
                             UARTDR_REG(CfgPtr->UARTPortID) = *(UART_TxBuffPtr[groupID] + UART_TxCount[groupID]);
                             UART_TxCount[groupID]++;
                         }
-                    // question. can we call the call back function here and finish the transmission? or should we wait for the other function to do the same?                }
                     }
                }
                else // FIFO is not enabled so we write one byte
                {
-                   uint8_t temp=UART_TxCount[groupID]; // This is done to prevent the TX from sending the first letter 2 times when the fifo is disabled
+                   UARTDR_REG(CfgPtr->UARTPortID) = *(UART_TxBuffPtr[groupID] + UART_TxCount[groupID]);
                    UART_TxCount[groupID]++;
-                   UARTDR_REG(CfgPtr->UARTPortID) = *(UART_TxBuffPtr[groupID] + temp);
                }
 
 
@@ -326,7 +324,7 @@ UART_ChkType UART_Tx_Init(const uint8_t* TxBuffPtr, uint8_t TxLen, uint8_t group
                         {
                             if((UART_TxLength[groupID]) >= (CfgPtr->FIFO_Level)) // the data is larger or equal to the FIFO interrupt level
                                 {
-                                    for(Transmitted_Bytes=0;Transmitted_Bytes<(CfgPtr->FIFO_Level);Transmitted_Bytes++)
+                                    for(Transmitted_Bytes=0;Transmitted_Bytes<(CfgPtr->FIFO_Level);Transmitted_Bytes++) // Fill the FIFO with a number of bytes enough to trigger an ISR
                                         {
                                             UARTDR_REG(CfgPtr->UARTPortID) = *(UART_TxBuffPtr[groupID] + UART_TxCount[groupID]);
                                             UART_TxCount[groupID]++;
@@ -334,7 +332,7 @@ UART_ChkType UART_Tx_Init(const uint8_t* TxBuffPtr, uint8_t TxLen, uint8_t group
                                 }
                             else // the Transmitted data is less than the FIFO interrupt level
                                 {
-                                    for(Transmitted_Bytes=0;Transmitted_Bytes<UART_TxLength[groupID];Transmitted_Bytes++)
+                                    for(Transmitted_Bytes=0;Transmitted_Bytes<UART_TxLength[groupID];Transmitted_Bytes++)// fit the whole number of bytes in the FIFO
                                         {
                                             UARTDR_REG(CfgPtr->UARTPortID) = *(UART_TxBuffPtr[groupID] + UART_TxCount[groupID]);
                                             UART_TxCount[groupID]++;
@@ -634,6 +632,8 @@ UART_ChkType UART_Rx (uint8_t groupID)
 
 }
 
+
+// This function is used to determine the groupID of each UART channel
 static uint8_t groupID_Search (uint8_t ChannelID)
 {
     uint8_t UART_groupID = 0;
@@ -644,6 +644,7 @@ static uint8_t groupID_Search (uint8_t ChannelID)
         for(LoopIndex = 0; LoopIndex < UART_GROUPS_NUMBER; LoopIndex++)
         {
             CfgPtr =&UART_ConfigParam[LoopIndex];
+            //Checking if the configuration has the required channelID
             if((CfgPtr->UARTPortID) == ChannelID)
             {
                 UART_groupID = LoopIndex;
@@ -673,7 +674,7 @@ void UART0_ISR(void)
          FIFO_State_Rx =(uint8_t)(CfgPtr_Rx->FIFOEN);
      }
 
-     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO is disabled
       {
           FIFO_State_Rx = 0;
       }
@@ -683,11 +684,12 @@ void UART0_ISR(void)
 
 
 
-            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID])
+            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID]) // Number of received bytes is less than the length that should be received
             {
                 if( (FIFO_State_Rx) != 0 )
                 {
-                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level) // in case the remaining bytes are more than 1 byte receive 2 bytes at a time
+                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level)
+// In case the remaining bytes are more than the interrupt level receive a number of bytes equal to the interrupt level
                     {
                         for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
                         {
@@ -699,30 +701,30 @@ void UART0_ISR(void)
                     if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) < Int_Level)   // The number of remaining bytes is less than the FIFO so we resize the FIFO accordingly
                     {
                         Remaining_Bytes = (UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]);
-                        if((Remaining_Bytes <14)&&(Remaining_Bytes >=12))
+                        if(Remaining_Bytes <2) // Only one byte is remaining. Disable the FIFO.
                         {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
-                            Int_Level=12;
+                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
+                            FIFO_State_Rx=0;
                         }
-                        else if((Remaining_Bytes <12)&&(Remaining_Bytes >=8))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
-                            Int_Level=8;
-                        }
-                        else if((Remaining_Bytes <8)&&(Remaining_Bytes >=4))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
-                            Int_Level=4;
-                        }
-                        else if((Remaining_Bytes <4)&&(Remaining_Bytes >=2))
+                        else if(Remaining_Bytes <4)
                         {
                             UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x0 << RXIFLSEL_BIT_NO);
                             Int_Level=2;
                         }
-                        else if((Remaining_Bytes <2)) // only one byte is remaining. Disable the FIFO.
+                        else if(Remaining_Bytes <8)
                         {
-                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
-                            FIFO_State_Rx=0;
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
+                            Int_Level=4;
+                        }
+                        else if(Remaining_Bytes <12)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
+                            Int_Level=8;
+                        }
+                        else if(Remaining_Bytes <14)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
+                            Int_Level=12;
                         }
 
                     }
@@ -776,30 +778,33 @@ void UART0_ISR(void)
     else if((UARTMIS_REG(CfgPtr_Tx->UARTPortID))&(1U <<5)) // the interrupt is caused by a transmitting operation
     {
 
-        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN);
+        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN); // We save the FIFO state here
 
-        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO was disabled in the init function
               {
                   FIFO_State_Tx = 0;
               }
 
 
                 if(UART_TxCount[UART_TX_groupID] < UART_TxLength[UART_TX_groupID])
+                // Didn't transmit all the bytes yet
                    {
                     Remaining_Bytes= UART_TxLength[UART_TX_groupID]- UART_TxCount[UART_TX_groupID];
-                    if( (FIFO_State_Tx) != 0 )
+                    if( (FIFO_State_Tx) != 0 ) //FIFO is enabled
                         {
 
-                            if(Remaining_Bytes < Int_Level )
+                            if(Remaining_Bytes < Int_Level ) // Remaining bytes are less than the interrupt level
                                 for(Processed_Bytes=0 ; Processed_Bytes < Remaining_Bytes;Processed_Bytes++)
+                                    // Receive a number of bytes equal to the remaining bytes only
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
 
                                 }
-                            else
+                            else // Remaining bytes are more than the interrupt level
                             {
                                 for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
+                                 //Receive a number of bytes equal to the interrupt level
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
@@ -836,10 +841,8 @@ void UART0_ISR(void)
 }
 
 
-
 void UART1_ISR(void)
 {
-     XXX++;
      uint8_t UART_RX_groupID = groupID_Search(1);
      uint8_t UART_TX_groupID = groupID_Search(1);
      uint8_t Processed_Bytes;
@@ -857,7 +860,7 @@ void UART1_ISR(void)
          FIFO_State_Rx =(uint8_t)(CfgPtr_Rx->FIFOEN);
      }
 
-     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO is disabled
       {
           FIFO_State_Rx = 0;
       }
@@ -867,11 +870,12 @@ void UART1_ISR(void)
 
 
 
-            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID])
+            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID]) // Number of received bytes is less than the length that should be received
             {
                 if( (FIFO_State_Rx) != 0 )
                 {
-                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level) // in case the remaining bytes are more than 1 byte receive 2 bytes at a time
+                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level)
+// In case the remaining bytes are more than the interrupt level receive a number of bytes equal to the interrupt level
                     {
                         for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
                         {
@@ -883,30 +887,30 @@ void UART1_ISR(void)
                     if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) < Int_Level)   // The number of remaining bytes is less than the FIFO so we resize the FIFO accordingly
                     {
                         Remaining_Bytes = (UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]);
-                        if((Remaining_Bytes <14)&&(Remaining_Bytes >=12))
+                        if(Remaining_Bytes <2) // Only one byte is remaining. Disable the FIFO.
                         {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
-                            Int_Level=12;
+                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
+                            FIFO_State_Rx=0;
                         }
-                        else if((Remaining_Bytes <12)&&(Remaining_Bytes >=8))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
-                            Int_Level=8;
-                        }
-                        else if((Remaining_Bytes <8)&&(Remaining_Bytes >=4))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
-                            Int_Level=4;
-                        }
-                        else if((Remaining_Bytes <4)&&(Remaining_Bytes >=2))
+                        else if(Remaining_Bytes <4)
                         {
                             UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x0 << RXIFLSEL_BIT_NO);
                             Int_Level=2;
                         }
-                        else if((Remaining_Bytes <2)) // only one byte is remaining. Disable the FIFO.
+                        else if(Remaining_Bytes <8)
                         {
-                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
-                            FIFO_State_Rx=0;
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
+                            Int_Level=4;
+                        }
+                        else if(Remaining_Bytes <12)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
+                            Int_Level=8;
+                        }
+                        else if(Remaining_Bytes <14)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
+                            Int_Level=12;
                         }
 
                     }
@@ -960,30 +964,33 @@ void UART1_ISR(void)
     else if((UARTMIS_REG(CfgPtr_Tx->UARTPortID))&(1U <<5)) // the interrupt is caused by a transmitting operation
     {
 
-        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN);
+        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN); // We save the FIFO state here
 
-        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO was disabled in the init function
               {
                   FIFO_State_Tx = 0;
               }
 
 
                 if(UART_TxCount[UART_TX_groupID] < UART_TxLength[UART_TX_groupID])
+                // Didn't transmit all the bytes yet
                    {
                     Remaining_Bytes= UART_TxLength[UART_TX_groupID]- UART_TxCount[UART_TX_groupID];
-                    if( (FIFO_State_Tx) != 0 )
+                    if( (FIFO_State_Tx) != 0 ) //FIFO is enabled
                         {
 
-                            if(Remaining_Bytes < Int_Level )
+                            if(Remaining_Bytes < Int_Level ) // Remaining bytes are less than the interrupt level
                                 for(Processed_Bytes=0 ; Processed_Bytes < Remaining_Bytes;Processed_Bytes++)
+                                    // Receive a number of bytes equal to the remaining bytes only
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
 
                                 }
-                            else
+                            else // Remaining bytes are more than the interrupt level
                             {
                                 for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
+                                 //Receive a number of bytes equal to the interrupt level
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
@@ -1018,6 +1025,7 @@ void UART1_ISR(void)
 
     }
 }
+
 
 
 
@@ -1040,7 +1048,7 @@ void UART2_ISR(void)
          FIFO_State_Rx =(uint8_t)(CfgPtr_Rx->FIFOEN);
      }
 
-     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO is disabled
       {
           FIFO_State_Rx = 0;
       }
@@ -1050,11 +1058,12 @@ void UART2_ISR(void)
 
 
 
-            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID])
+            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID]) // Number of received bytes is less than the length that should be received
             {
                 if( (FIFO_State_Rx) != 0 )
                 {
-                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level) // in case the remaining bytes are more than 1 byte receive 2 bytes at a time
+                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level)
+// In case the remaining bytes are more than the interrupt level receive a number of bytes equal to the interrupt level
                     {
                         for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
                         {
@@ -1066,30 +1075,30 @@ void UART2_ISR(void)
                     if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) < Int_Level)   // The number of remaining bytes is less than the FIFO so we resize the FIFO accordingly
                     {
                         Remaining_Bytes = (UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]);
-                        if((Remaining_Bytes <14)&&(Remaining_Bytes >=12))
+                        if(Remaining_Bytes <2) // Only one byte is remaining. Disable the FIFO.
                         {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
-                            Int_Level=12;
+                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
+                            FIFO_State_Rx=0;
                         }
-                        else if((Remaining_Bytes <12)&&(Remaining_Bytes >=8))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
-                            Int_Level=8;
-                        }
-                        else if((Remaining_Bytes <8)&&(Remaining_Bytes >=4))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
-                            Int_Level=4;
-                        }
-                        else if((Remaining_Bytes <4)&&(Remaining_Bytes >=2))
+                        else if(Remaining_Bytes <4)
                         {
                             UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x0 << RXIFLSEL_BIT_NO);
                             Int_Level=2;
                         }
-                        else if((Remaining_Bytes <2)) // only one byte is remaining. Disable the FIFO.
+                        else if(Remaining_Bytes <8)
                         {
-                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
-                            FIFO_State_Rx=0;
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
+                            Int_Level=4;
+                        }
+                        else if(Remaining_Bytes <12)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
+                            Int_Level=8;
+                        }
+                        else if(Remaining_Bytes <14)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
+                            Int_Level=12;
                         }
 
                     }
@@ -1143,30 +1152,33 @@ void UART2_ISR(void)
     else if((UARTMIS_REG(CfgPtr_Tx->UARTPortID))&(1U <<5)) // the interrupt is caused by a transmitting operation
     {
 
-        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN);
+        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN); // We save the FIFO state here
 
-        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO was disabled in the init function
               {
                   FIFO_State_Tx = 0;
               }
 
 
                 if(UART_TxCount[UART_TX_groupID] < UART_TxLength[UART_TX_groupID])
+                // Didn't transmit all the bytes yet
                    {
                     Remaining_Bytes= UART_TxLength[UART_TX_groupID]- UART_TxCount[UART_TX_groupID];
-                    if( (FIFO_State_Tx) != 0 )
+                    if( (FIFO_State_Tx) != 0 ) //FIFO is enabled
                         {
 
-                            if(Remaining_Bytes < Int_Level )
+                            if(Remaining_Bytes < Int_Level ) // Remaining bytes are less than the interrupt level
                                 for(Processed_Bytes=0 ; Processed_Bytes < Remaining_Bytes;Processed_Bytes++)
+                                    // Receive a number of bytes equal to the remaining bytes only
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
 
                                 }
-                            else
+                            else // Remaining bytes are more than the interrupt level
                             {
                                 for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
+                                 //Receive a number of bytes equal to the interrupt level
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
@@ -1201,9 +1213,6 @@ void UART2_ISR(void)
 
     }
 }
-
-
-
 
 
 
@@ -1228,7 +1237,7 @@ void UART3_ISR(void)
          FIFO_State_Rx =(uint8_t)(CfgPtr_Rx->FIFOEN);
      }
 
-     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO is disabled
       {
           FIFO_State_Rx = 0;
       }
@@ -1238,11 +1247,12 @@ void UART3_ISR(void)
 
 
 
-            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID])
+            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID]) // Number of received bytes is less than the length that should be received
             {
                 if( (FIFO_State_Rx) != 0 )
                 {
-                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level) // in case the remaining bytes are more than 1 byte receive 2 bytes at a time
+                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level)
+// In case the remaining bytes are more than the interrupt level receive a number of bytes equal to the interrupt level
                     {
                         for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
                         {
@@ -1254,30 +1264,30 @@ void UART3_ISR(void)
                     if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) < Int_Level)   // The number of remaining bytes is less than the FIFO so we resize the FIFO accordingly
                     {
                         Remaining_Bytes = (UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]);
-                        if((Remaining_Bytes <14)&&(Remaining_Bytes >=12))
+                        if(Remaining_Bytes <2) // Only one byte is remaining. Disable the FIFO.
                         {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
-                            Int_Level=12;
+                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
+                            FIFO_State_Rx=0;
                         }
-                        else if((Remaining_Bytes <12)&&(Remaining_Bytes >=8))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
-                            Int_Level=8;
-                        }
-                        else if((Remaining_Bytes <8)&&(Remaining_Bytes >=4))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
-                            Int_Level=4;
-                        }
-                        else if((Remaining_Bytes <4)&&(Remaining_Bytes >=2))
+                        else if(Remaining_Bytes <4)
                         {
                             UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x0 << RXIFLSEL_BIT_NO);
                             Int_Level=2;
                         }
-                        else if((Remaining_Bytes <2)) // only one byte is remaining. Disable the FIFO.
+                        else if(Remaining_Bytes <8)
                         {
-                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
-                            FIFO_State_Rx=0;
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
+                            Int_Level=4;
+                        }
+                        else if(Remaining_Bytes <12)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
+                            Int_Level=8;
+                        }
+                        else if(Remaining_Bytes <14)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
+                            Int_Level=12;
                         }
 
                     }
@@ -1331,30 +1341,33 @@ void UART3_ISR(void)
     else if((UARTMIS_REG(CfgPtr_Tx->UARTPortID))&(1U <<5)) // the interrupt is caused by a transmitting operation
     {
 
-        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN);
+        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN); // We save the FIFO state here
 
-        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO was disabled in the init function
               {
                   FIFO_State_Tx = 0;
               }
 
 
                 if(UART_TxCount[UART_TX_groupID] < UART_TxLength[UART_TX_groupID])
+                // Didn't transmit all the bytes yet
                    {
                     Remaining_Bytes= UART_TxLength[UART_TX_groupID]- UART_TxCount[UART_TX_groupID];
-                    if( (FIFO_State_Tx) != 0 )
+                    if( (FIFO_State_Tx) != 0 ) //FIFO is enabled
                         {
 
-                            if(Remaining_Bytes < Int_Level )
+                            if(Remaining_Bytes < Int_Level ) // Remaining bytes are less than the interrupt level
                                 for(Processed_Bytes=0 ; Processed_Bytes < Remaining_Bytes;Processed_Bytes++)
+                                    // Receive a number of bytes equal to the remaining bytes only
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
 
                                 }
-                            else
+                            else // Remaining bytes are more than the interrupt level
                             {
                                 for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
+                                 //Receive a number of bytes equal to the interrupt level
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
@@ -1410,7 +1423,7 @@ void UART4_ISR(void)
          FIFO_State_Rx =(uint8_t)(CfgPtr_Rx->FIFOEN);
      }
 
-     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO is disabled
       {
           FIFO_State_Rx = 0;
       }
@@ -1420,11 +1433,12 @@ void UART4_ISR(void)
 
 
 
-            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID])
+            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID]) // Number of received bytes is less than the length that should be received
             {
                 if( (FIFO_State_Rx) != 0 )
                 {
-                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level) // in case the remaining bytes are more than 1 byte receive 2 bytes at a time
+                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level)
+// In case the remaining bytes are more than the interrupt level receive a number of bytes equal to the interrupt level
                     {
                         for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
                         {
@@ -1436,30 +1450,30 @@ void UART4_ISR(void)
                     if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) < Int_Level)   // The number of remaining bytes is less than the FIFO so we resize the FIFO accordingly
                     {
                         Remaining_Bytes = (UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]);
-                        if((Remaining_Bytes <14)&&(Remaining_Bytes >=12))
+                        if(Remaining_Bytes <2) // Only one byte is remaining. Disable the FIFO.
                         {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
-                            Int_Level=12;
+                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
+                            FIFO_State_Rx=0;
                         }
-                        else if((Remaining_Bytes <12)&&(Remaining_Bytes >=8))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
-                            Int_Level=8;
-                        }
-                        else if((Remaining_Bytes <8)&&(Remaining_Bytes >=4))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
-                            Int_Level=4;
-                        }
-                        else if((Remaining_Bytes <4)&&(Remaining_Bytes >=2))
+                        else if(Remaining_Bytes <4)
                         {
                             UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x0 << RXIFLSEL_BIT_NO);
                             Int_Level=2;
                         }
-                        else if((Remaining_Bytes <2)) // only one byte is remaining. Disable the FIFO.
+                        else if(Remaining_Bytes <8)
                         {
-                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
-                            FIFO_State_Rx=0;
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
+                            Int_Level=4;
+                        }
+                        else if(Remaining_Bytes <12)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
+                            Int_Level=8;
+                        }
+                        else if(Remaining_Bytes <14)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
+                            Int_Level=12;
                         }
 
                     }
@@ -1513,30 +1527,33 @@ void UART4_ISR(void)
     else if((UARTMIS_REG(CfgPtr_Tx->UARTPortID))&(1U <<5)) // the interrupt is caused by a transmitting operation
     {
 
-        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN);
+        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN); // We save the FIFO state here
 
-        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO was disabled in the init function
               {
                   FIFO_State_Tx = 0;
               }
 
 
                 if(UART_TxCount[UART_TX_groupID] < UART_TxLength[UART_TX_groupID])
+                // Didn't transmit all the bytes yet
                    {
                     Remaining_Bytes= UART_TxLength[UART_TX_groupID]- UART_TxCount[UART_TX_groupID];
-                    if( (FIFO_State_Tx) != 0 )
+                    if( (FIFO_State_Tx) != 0 ) //FIFO is enabled
                         {
 
-                            if(Remaining_Bytes < Int_Level )
+                            if(Remaining_Bytes < Int_Level ) // Remaining bytes are less than the interrupt level
                                 for(Processed_Bytes=0 ; Processed_Bytes < Remaining_Bytes;Processed_Bytes++)
+                                    // Receive a number of bytes equal to the remaining bytes only
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
 
                                 }
-                            else
+                            else // Remaining bytes are more than the interrupt level
                             {
                                 for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
+                                 //Receive a number of bytes equal to the interrupt level
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
@@ -1571,8 +1588,6 @@ void UART4_ISR(void)
 
     }
 }
-
-
 
 
 void UART5_ISR(void)
@@ -1594,7 +1609,7 @@ void UART5_ISR(void)
          FIFO_State_Rx =(uint8_t)(CfgPtr_Rx->FIFOEN);
      }
 
-     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO is disabled
       {
           FIFO_State_Rx = 0;
       }
@@ -1604,11 +1619,12 @@ void UART5_ISR(void)
 
 
 
-            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID])
+            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID]) // Number of received bytes is less than the length that should be received
             {
                 if( (FIFO_State_Rx) != 0 )
                 {
-                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level) // in case the remaining bytes are more than 1 byte receive 2 bytes at a time
+                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level)
+// In case the remaining bytes are more than the interrupt level receive a number of bytes equal to the interrupt level
                     {
                         for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
                         {
@@ -1620,30 +1636,30 @@ void UART5_ISR(void)
                     if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) < Int_Level)   // The number of remaining bytes is less than the FIFO so we resize the FIFO accordingly
                     {
                         Remaining_Bytes = (UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]);
-                        if((Remaining_Bytes <14)&&(Remaining_Bytes >=12))
+                        if(Remaining_Bytes <2) // Only one byte is remaining. Disable the FIFO.
                         {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
-                            Int_Level=12;
+                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
+                            FIFO_State_Rx=0;
                         }
-                        else if((Remaining_Bytes <12)&&(Remaining_Bytes >=8))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
-                            Int_Level=8;
-                        }
-                        else if((Remaining_Bytes <8)&&(Remaining_Bytes >=4))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
-                            Int_Level=4;
-                        }
-                        else if((Remaining_Bytes <4)&&(Remaining_Bytes >=2))
+                        else if(Remaining_Bytes <4)
                         {
                             UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x0 << RXIFLSEL_BIT_NO);
                             Int_Level=2;
                         }
-                        else if((Remaining_Bytes <2)) // only one byte is remaining. Disable the FIFO.
+                        else if(Remaining_Bytes <8)
                         {
-                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
-                            FIFO_State_Rx=0;
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
+                            Int_Level=4;
+                        }
+                        else if(Remaining_Bytes <12)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
+                            Int_Level=8;
+                        }
+                        else if(Remaining_Bytes <14)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
+                            Int_Level=12;
                         }
 
                     }
@@ -1697,30 +1713,33 @@ void UART5_ISR(void)
     else if((UARTMIS_REG(CfgPtr_Tx->UARTPortID))&(1U <<5)) // the interrupt is caused by a transmitting operation
     {
 
-        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN);
+        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN); // We save the FIFO state here
 
-        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO was disabled in the init function
               {
                   FIFO_State_Tx = 0;
               }
 
 
                 if(UART_TxCount[UART_TX_groupID] < UART_TxLength[UART_TX_groupID])
+                // Didn't transmit all the bytes yet
                    {
                     Remaining_Bytes= UART_TxLength[UART_TX_groupID]- UART_TxCount[UART_TX_groupID];
-                    if( (FIFO_State_Tx) != 0 )
+                    if( (FIFO_State_Tx) != 0 ) //FIFO is enabled
                         {
 
-                            if(Remaining_Bytes < Int_Level )
+                            if(Remaining_Bytes < Int_Level ) // Remaining bytes are less than the interrupt level
                                 for(Processed_Bytes=0 ; Processed_Bytes < Remaining_Bytes;Processed_Bytes++)
+                                    // Receive a number of bytes equal to the remaining bytes only
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
 
                                 }
-                            else
+                            else // Remaining bytes are more than the interrupt level
                             {
                                 for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
+                                 //Receive a number of bytes equal to the interrupt level
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
@@ -1755,6 +1774,7 @@ void UART5_ISR(void)
 
     }
 }
+
 
 
 
@@ -1777,7 +1797,7 @@ void UART6_ISR(void)
          FIFO_State_Rx =(uint8_t)(CfgPtr_Rx->FIFOEN);
      }
 
-     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO is disabled
       {
           FIFO_State_Rx = 0;
       }
@@ -1787,11 +1807,12 @@ void UART6_ISR(void)
 
 
 
-            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID])
+            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID]) // Number of received bytes is less than the length that should be received
             {
                 if( (FIFO_State_Rx) != 0 )
                 {
-                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level) // in case the remaining bytes are more than 1 byte receive 2 bytes at a time
+                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level)
+// In case the remaining bytes are more than the interrupt level receive a number of bytes equal to the interrupt level
                     {
                         for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
                         {
@@ -1803,30 +1824,30 @@ void UART6_ISR(void)
                     if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) < Int_Level)   // The number of remaining bytes is less than the FIFO so we resize the FIFO accordingly
                     {
                         Remaining_Bytes = (UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]);
-                        if((Remaining_Bytes <14)&&(Remaining_Bytes >=12))
+                        if(Remaining_Bytes <2) // Only one byte is remaining. Disable the FIFO.
                         {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
-                            Int_Level=12;
+                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
+                            FIFO_State_Rx=0;
                         }
-                        else if((Remaining_Bytes <12)&&(Remaining_Bytes >=8))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
-                            Int_Level=8;
-                        }
-                        else if((Remaining_Bytes <8)&&(Remaining_Bytes >=4))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
-                            Int_Level=4;
-                        }
-                        else if((Remaining_Bytes <4)&&(Remaining_Bytes >=2))
+                        else if(Remaining_Bytes <4)
                         {
                             UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x0 << RXIFLSEL_BIT_NO);
                             Int_Level=2;
                         }
-                        else if((Remaining_Bytes <2)) // only one byte is remaining. Disable the FIFO.
+                        else if(Remaining_Bytes <8)
                         {
-                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
-                            FIFO_State_Rx=0;
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
+                            Int_Level=4;
+                        }
+                        else if(Remaining_Bytes <12)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
+                            Int_Level=8;
+                        }
+                        else if(Remaining_Bytes <14)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
+                            Int_Level=12;
                         }
 
                     }
@@ -1880,30 +1901,33 @@ void UART6_ISR(void)
     else if((UARTMIS_REG(CfgPtr_Tx->UARTPortID))&(1U <<5)) // the interrupt is caused by a transmitting operation
     {
 
-        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN);
+        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN); // We save the FIFO state here
 
-        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO was disabled in the init function
               {
                   FIFO_State_Tx = 0;
               }
 
 
                 if(UART_TxCount[UART_TX_groupID] < UART_TxLength[UART_TX_groupID])
+                // Didn't transmit all the bytes yet
                    {
                     Remaining_Bytes= UART_TxLength[UART_TX_groupID]- UART_TxCount[UART_TX_groupID];
-                    if( (FIFO_State_Tx) != 0 )
+                    if( (FIFO_State_Tx) != 0 ) //FIFO is enabled
                         {
 
-                            if(Remaining_Bytes < Int_Level )
+                            if(Remaining_Bytes < Int_Level ) // Remaining bytes are less than the interrupt level
                                 for(Processed_Bytes=0 ; Processed_Bytes < Remaining_Bytes;Processed_Bytes++)
+                                    // Receive a number of bytes equal to the remaining bytes only
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
 
                                 }
-                            else
+                            else // Remaining bytes are more than the interrupt level
                             {
                                 for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
+                                 //Receive a number of bytes equal to the interrupt level
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
@@ -1938,8 +1962,6 @@ void UART6_ISR(void)
 
     }
 }
-
-
 
 
 
@@ -1962,7 +1984,7 @@ void UART7_ISR(void)
          FIFO_State_Rx =(uint8_t)(CfgPtr_Rx->FIFOEN);
      }
 
-     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+     if((UARTLCRH_REG(CfgPtr_Rx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO is disabled
       {
           FIFO_State_Rx = 0;
       }
@@ -1972,11 +1994,12 @@ void UART7_ISR(void)
 
 
 
-            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID])
+            if(UART_RxCount[UART_RX_groupID] < UART_RxLength[UART_RX_groupID]) // Number of received bytes is less than the length that should be received
             {
                 if( (FIFO_State_Rx) != 0 )
                 {
-                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level) // in case the remaining bytes are more than 1 byte receive 2 bytes at a time
+                    if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) >= Int_Level)
+// In case the remaining bytes are more than the interrupt level receive a number of bytes equal to the interrupt level
                     {
                         for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
                         {
@@ -1988,30 +2011,30 @@ void UART7_ISR(void)
                     if((UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]) < Int_Level)   // The number of remaining bytes is less than the FIFO so we resize the FIFO accordingly
                     {
                         Remaining_Bytes = (UART_RxLength[UART_RX_groupID]-UART_RxCount[UART_RX_groupID]);
-                        if((Remaining_Bytes <14)&&(Remaining_Bytes >=12))
+                        if(Remaining_Bytes <2) // Only one byte is remaining. Disable the FIFO.
                         {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
-                            Int_Level=12;
+                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
+                            FIFO_State_Rx=0;
                         }
-                        else if((Remaining_Bytes <12)&&(Remaining_Bytes >=8))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
-                            Int_Level=8;
-                        }
-                        else if((Remaining_Bytes <8)&&(Remaining_Bytes >=4))
-                        {
-                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
-                            Int_Level=4;
-                        }
-                        else if((Remaining_Bytes <4)&&(Remaining_Bytes >=2))
+                        else if(Remaining_Bytes <4)
                         {
                             UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x0 << RXIFLSEL_BIT_NO);
                             Int_Level=2;
                         }
-                        else if((Remaining_Bytes <2)) // only one byte is remaining. Disable the FIFO.
+                        else if(Remaining_Bytes <8)
                         {
-                            UARTLCRH_REG(CfgPtr_Rx->UARTPortID) &= ~(1U<<FEN_BIT_NO);
-                            FIFO_State_Rx=0;
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x1 << RXIFLSEL_BIT_NO);
+                            Int_Level=4;
+                        }
+                        else if(Remaining_Bytes <12)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x2 << RXIFLSEL_BIT_NO);
+                            Int_Level=8;
+                        }
+                        else if(Remaining_Bytes <14)
+                        {
+                            UARTIFLS_REG(CfgPtr_Rx->UARTPortID)=(0x3 << RXIFLSEL_BIT_NO);
+                            Int_Level=12;
                         }
 
                     }
@@ -2065,30 +2088,33 @@ void UART7_ISR(void)
     else if((UARTMIS_REG(CfgPtr_Tx->UARTPortID))&(1U <<5)) // the interrupt is caused by a transmitting operation
     {
 
-        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN);
+        FIFO_State_Tx =(uint8_t)(CfgPtr_Tx->FIFOEN); // We save the FIFO state here
 
-        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0)
+        if((UARTLCRH_REG(CfgPtr_Tx->UARTPortID)&(1U<<FEN_BIT_NO)) == 0) // FIFO was disabled in the init function
               {
                   FIFO_State_Tx = 0;
               }
 
 
                 if(UART_TxCount[UART_TX_groupID] < UART_TxLength[UART_TX_groupID])
+                // Didn't transmit all the bytes yet
                    {
                     Remaining_Bytes= UART_TxLength[UART_TX_groupID]- UART_TxCount[UART_TX_groupID];
-                    if( (FIFO_State_Tx) != 0 )
+                    if( (FIFO_State_Tx) != 0 ) //FIFO is enabled
                         {
 
-                            if(Remaining_Bytes < Int_Level )
+                            if(Remaining_Bytes < Int_Level ) // Remaining bytes are less than the interrupt level
                                 for(Processed_Bytes=0 ; Processed_Bytes < Remaining_Bytes;Processed_Bytes++)
+                                    // Receive a number of bytes equal to the remaining bytes only
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
 
                                 }
-                            else
+                            else // Remaining bytes are more than the interrupt level
                             {
                                 for(Processed_Bytes=0;Processed_Bytes < Int_Level;Processed_Bytes++)
+                                 //Receive a number of bytes equal to the interrupt level
                                 {
                                     UARTDR_REG(CfgPtr_Tx->UARTPortID) = *(UART_TxBuffPtr[UART_TX_groupID] + UART_TxCount[UART_TX_groupID]);
                                     UART_TxCount[UART_TX_groupID]++;
@@ -2123,5 +2149,3 @@ void UART7_ISR(void)
 
     }
 }
-
-
