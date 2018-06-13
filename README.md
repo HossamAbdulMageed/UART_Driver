@@ -6,12 +6,12 @@ UART User Manual
 
 
 1. Configure the GPIO pins for the UART you intend to use.
-•	Open GPIO_Cfg.h and alter the definition of GPIO_GROUPS_NUMBER.
-•	Open GPIO_Cfg.c and alter the configuration for each pin. You only need to change the PortId, PortMask, and PortDirection variables. The other variable can be left unchanged.
+Open GPIO_Cfg.h and alter the definition of GPIO_GROUPS_NUMBER.
+Open GPIO_Cfg.c and alter the configuration for each pin. You only need to change the PortId, PortMask, and PortDirection variables. The other variable can be left unchanged.
 
 Example: Configuring the GPIO pins for UART2.
-•	Open GPIO_Cfg.h and alter the definition of GPIO_GROUPS_NUMBER to 2.
-•	Based on table 14-1 in the TM4c123GH6PM datasheet at page 892, PD6 and PD7 are the pins assigned for UART2.
+Open GPIO_Cfg.h and alter the definition of GPIO_GROUPS_NUMBER to 2.
+Based on table 14-1 in the TM4c123GH6PM datasheet at page 892, PD6 and PD7 are the pins assigned for UART2.
 So, the PortID, PortMask, and PortDirection for the GPIO pins will be assigned the values 0x03, 1<<6, 0x00 and 0x03, 1<<7, 0xff respectively.
 •	That makes the groupID = 0 for the Rx pin 1 and makes the groupID = 1 for the Tx pin. Pay attention to this as we will be using it in the following section.
 
